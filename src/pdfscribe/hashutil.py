@@ -21,3 +21,10 @@ def sha256_file(path: Path) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def sha256_bytes(data: bytes) -> str:
+    """
+    Compute the SHA-256 hash of a bytes object.
+    """
+    return hashlib.sha256(data).hexdigest()
