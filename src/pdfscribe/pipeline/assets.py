@@ -11,7 +11,7 @@ def find_page_md(run_dir: Path, page: int) -> Path:
     """
     Find the Markdown file for a given page in the run directory.
     """
-    p = run_dir / f"page-{page:04d}.md"
+    p = run_dir / f"page_{page:04d}.md"
     if not p.exists():
         raise FileNotFoundError(f"Markdown for page {page} not found in {run_dir}")
     return p

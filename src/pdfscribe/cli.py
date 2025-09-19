@@ -4,12 +4,15 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from openai import OpenAI
 
 from . import __version__
 from .config import DoclingConfig
 from .hashutil import sha256_file
 from .cache import cache_is_valid, write_manifest
 from .pipeline.parse_pdf import run_docling
+from .pipeline.describe_page import describe_page
+from .pipeline.prefilter import HeuristicConfig
 
 app = typer.Typer(add_completion=False, help="pdfscribe: PDF --> Markdown (docling)")
 
@@ -101,6 +104,90 @@ def parse(
             f"[bold green]Done[/bold green]. {len(md_files)} markdown files emitted."
         )
         console.print(f"Index: [underline]{(run_dir / 'index.md')}[/underline]")
+
+
+@app.command("describe")
+def describe(
+    pdf: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to input PDF (used only to locate cache dir)",
+    ),
+    outdir: Path = typer.Option(
+        Path("output"), "--outdir", "-o", help="Output directory root"
+    ),
+    model: str = typer.Option("gpt-4o-mini", help="OpenAI vision-capable model"),
+    prompt_version: str = typer.Option(
+        "v1", help="Prompt/schema version for cache keying"
+    ),
+    page: int = typer.Option(
+        -1, help="Describe only this page (1-based). Use -1 for all pages."
+    ),
+    max_images_per_page: int = typer.Option(
+        6, help="Max candidate images to send to VLM per page"
+    ),
+    use_cache: bool = typer.Option(True, help="Reuse previous VLM JSON if unchanged"),
+    entropy_thresh: float = typer.Option(2.0, help="Heuristic: min entropy to keep"),
+    edge_density_thresh: float = typer.Option(
+        0.004, help="Heuristic: min edge density to keep"
+    ),
+    min_w: int = typer.Option(32, help="Heuristic: min width"),
+    min_h: int = typer.Option(32, help="Heuristic: min height"),
+    max_aspect: float = typer.Option(8.0, help="Heuristic: max aspect ratio"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+) -> None:
+    """
+    Classify and describe images per page using a VLM, and inject explanations into Markdown.
+    Requires OPENAI_API_KEY.
+    """
+    # Locate the run_dir from sha of pdf (same convention as parse)
+    from .hashutil import sha256_file
+
+    sha = sha256_file(pdf)
+    run_dir = (outdir.resolve()) / sha[:16]
+    if not run_dir.exists():
+        _abort(
+            f"Parsed output not found: {run_dir}. Run 'pdfscribe parse {pdf} -o {outdir}' first."
+        )
+
+    client = OpenAI()  # needs OPENAI_API_KEY in env
+    # Discover page count from existing files
+    pages = sorted(int(p.stem.split("_")[1]) for p in run_dir.glob("page_*.md"))
+    if page != -1:
+        if page not in pages:
+            _abort(f"Page {page} not found in {run_dir}")
+        pages = [page]
+
+    hcfg = HeuristicConfig(
+        min_w=min_w,
+        min_h=min_h,
+        max_aspect=max_aspect,
+        entropy_thresh=entropy_thresh,
+        edge_density_thresh=edge_density_thresh,
+    )
+
+    total = 0
+    for pg in pages:
+        res = describe_page(
+            run_dir,
+            pg,
+            model=model,
+            prompt_version=prompt_version,
+            hcfg=hcfg,
+            client=client,
+            max_images=max_images_per_page,
+            use_cache=use_cache,
+        )
+        total += len(res)
+        if not quiet:
+            console.print(f"[cyan]Page {pg}[/cyan]: described {len(res)} images.")
+
+    if not quiet:
+        console.print(
+            f"[bold green]Done[/bold green]. Injected captions/explanations. Total images: {total}"
+        )
 
 
 @app.command("version")
