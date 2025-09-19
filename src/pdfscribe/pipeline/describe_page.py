@@ -1,6 +1,7 @@
 # src/pdfscribe/pipeline/describe_page.py
 from __future__ import annotations
 import json
+import re
 from pathlib import Path
 from typing import List, Tuple
 from openai import OpenAI
@@ -91,16 +92,14 @@ def inject_explanations(page_md_path: Path, results: List[VlmResult]) -> None:
     """
     md = page_md_path.read_text(encoding="utf-8")
     for result in results:
-        img_name = Path(result.image_id.split("_")[-1]).name
-        fname = Path(result.image_id.replace("img_p", "image_")).name  # fallback
+        # NOTE: Find the image reference in markdown
+        # It looks like ![alt](path/to/img_p001_abc123.png)
+        png_stem = result.image_id.split("img_p", 1)[-1].split("_", 1)[-1]
+        pattern = re.compile(rf"(\!\[.*?\]\([^\)]*{re.escape(png_stem)}\.png\))")
         block = _render_block(result)
-
-        if img_name in md:
-            md = md.replace(img_name + ")", img_name + ")\n\n" + block, 1)
-        elif fname in md:
-            md = md.replace(fname + ")", fname + ")\n\n" + block, 1)
+        if pattern.search(md):
+            md = pattern.sub(rf"\1\n\n{block}", md, count=1)
         else:
-            # If not found, append at end
             md += "\n\n" + block
     page_md_path.write_text(md, encoding="utf-8")
 
@@ -146,16 +145,39 @@ def describe_page(
                 continue
         pending.append(e)
 
-    # Call VLM if needed
+    # Call VLM if needed (simple: one image -> one described string)
     if pending:
-        from .vlm import call_openai_json
+        from .vlm_simple import describe_images_simple
 
-        batch = call_openai_json(
-            client, model, page, page_text, pending, prompt_version
+        # TODO: Add page_text for context later
+        pairs = describe_images_simple(
+            client=client, model=model, page_text_hint=page_text, elements=pending
         )
-        for r in batch:
-            _save_cached(run_dir, r.image_id, r.model_dump())
-        results.extend(batch)
+        for image_id, text in pairs:
+            # Build the tiniest record for caching + downstream uses
+            el = next(e for e in pending if e.id == image_id)
+            rec = {
+                "page": page,
+                "image_id": image_id,
+                "classification": "MEANINGLESS"
+                if text.upper() == "MEANINGLESS"
+                else "INFORMATIVE",
+                "kind": "other",
+                "title_guess": None,
+                "one_sentence": "" if text.upper() == "MEANINGLESS" else text,
+                "bullets": [],
+                "numbers_present": False,
+                "quoted_values": [],
+                "gfm_table": None,
+                "uncertainty_notes": None,
+                "confidence": 1.0 if text.upper() == "MEANINGLESS" else 0.7,
+                "model": model,
+                "prompt_version": prompt_version,
+                "image_sha256": el.sha256,
+            }
+
+            _save_cached(run_dir, image_id, rec)
+            results.append(VlmResult.model_validate(rec))
 
     # Inject back into markdown
     page_md = run_dir / f"page_{page:04d}.md"

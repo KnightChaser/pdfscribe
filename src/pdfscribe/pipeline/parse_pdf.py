@@ -80,7 +80,7 @@ def run_docling(
     # NOTE: (optional) write a simple index
     index = out_dir / "index.md"
     index.write_text(
-        "\n".join(f"- [Page {i}](page_{i:03d}.md)" for i in pages),
+        "\n".join(f"- [Page {i}](page_{i:04d}.md)" for i in pages),
         encoding="utf-8",
     )
 
