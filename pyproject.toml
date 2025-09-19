@@ -1,8 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pdfscribe"
 version = "0.1.0"
-description = "Add your description here"
+description = "Explainable PDf -> markdown converter, docling-backboned"
 readme = "README.md"
+authors = [{ name = "knightchaser", email = "a23375667@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "docling>=2.53.0",
@@ -10,3 +15,9 @@ dependencies = [
     "rich>=14.1.0",
     "typer>=0.16.1",
 ]
+
+[project.scripts]
+pdfscribe = "pdfscribe.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
