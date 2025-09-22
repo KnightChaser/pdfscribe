@@ -2,6 +2,8 @@
 from __future__ import annotations
 from pathlib import Path
 import typer
+import os
+import shutil
 from rich.console import Console
 from rich.panel import Panel
 from openai import OpenAI
@@ -25,6 +27,39 @@ def _abort(msg: str, code: int = 1) -> None:
     """
     console.print(f"[bold red]Error:[/bold red] {msg}")
     raise typer.Exit(code=code)
+
+
+def _prepare_render_dir(source: Path, target: Path) -> None:
+    """
+    Prepare a render directory by copying markdown files and linking images.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+
+    # Copy the page_*.md markdown files and index.md if present
+    for md in source.glob("page_*.md"):
+        shutil.copy2(md, target / md.name)
+    idx = source / "index.md"
+    if idx.exists():
+        shutil.copy2(idx, target / "index.md")
+
+    # 2. Link or symlink images to avoid duplication
+    src_img = source / "images"
+    dst_img = target / "images"
+    if dst_img.exists():
+        return
+    for p in src_img.rglob("*"):
+        rel = p.relative_to(src_img)
+        d = dst_img / rel.parent
+        d.mkdir(parents=True, exist_ok=True)
+        if p.is_file():
+            try:
+                os.link(p, d / p.name)  # hard link
+            except OSError:
+                # fallback to symlink.
+                try:
+                    (d / p.name).symlink_to(p)
+                except Exception:
+                    shutil.copy2(p, d / p.name)  # last resort: copy
 
 
 @app.command("parse")
@@ -137,6 +172,12 @@ def describe(
     min_h: int = typer.Option(32, help="Heuristic: min height"),
     max_aspect: float = typer.Option(8.0, help="Heuristic: max aspect ratio"),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
+    write_mode: str = typer.Option(
+        "in_place", help="Where to write captions: in_place | copy"
+    ),
+    render_subdir: str = typer.Option(
+        "render", help="Subdirectory name used when write_mode=copy"
+    ),
 ) -> None:
     """
     Classify and describe images per page using a VLM, and inject explanations into Markdown.
@@ -151,6 +192,11 @@ def describe(
         _abort(
             f"Parsed output not found: {run_dir}. Run 'pdfscribe parse {pdf} -o {outdir}' first."
         )
+
+    target_dir = run_dir
+    if write_mode == "copy":
+        target_dir = run_dir / render_subdir
+        _prepare_render_dir(source=run_dir, target=target_dir)
 
     client = OpenAI()  # needs OPENAI_API_KEY in env
     # Discover page count from existing files
@@ -171,14 +217,15 @@ def describe(
     total = 0
     for pg in pages:
         res = describe_page(
-            run_dir,
-            pg,
+            run_dir=run_dir,
+            page=pg,
             model=model,
             prompt_version=prompt_version,
             hcfg=hcfg,
             client=client,
             max_images=max_images_per_page,
             use_cache=use_cache,
+            page_md_override=target_dir / f"page_{pg:04d}.md",  # write here
         )
         total += len(res)
         if not quiet:

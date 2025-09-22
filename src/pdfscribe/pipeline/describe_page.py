@@ -61,6 +61,7 @@ def prefilter_elements(
 def _render_block(r: VlmResult) -> str:
     """
     Render a VLM result as a markdown block with caption and details.
+    The block is anchored with HTML comments for idempotent reinjection.
     """
     if r.classification == "MEANINGLESS":
         caption = "Decorative/meaningless image. Skipped."
@@ -80,10 +81,12 @@ _Provenance_: id={r.image_id}, conf={r.confidence:.2f}, model={r.model}, sha256=
 </details>
 """.strip()
 
-    return f"""*Caption (VLM):* {caption}
+    body = f"""*Caption (VLM):* {caption}
 
-{details}
-""".strip()
+{details}""".strip()
+
+    anchor = "f<!-- pdfscribe:{r.image_id} -->"
+    return f"{anchor}\n{body}\n{anchor}"
 
 
 def inject_explanations(page_md_path: Path, results: List[VlmResult]) -> None:
@@ -91,16 +94,24 @@ def inject_explanations(page_md_path: Path, results: List[VlmResult]) -> None:
     Inject VLM explanations into the markdown content of a page.
     """
     md = page_md_path.read_text(encoding="utf-8")
-    for result in results:
-        # NOTE: Find the image reference in markdown
-        # It looks like ![alt](path/to/img_p001_abc123.png)
-        png_stem = result.image_id.split("img_p", 1)[-1].split("_", 1)[-1]
+    for r in results:
+        block = _render_block(r)
+        anchor = f"<!-- pdfscribe:{r.image_id} -->"
+
+        # Replace existing "anchored block" if present
+        anchored = re.compile(re.escape(anchor) + r".*?" + re.escape(anchor), re.S)
+        if anchored.search(md):
+            md = anchored.sub(block, md, count=1)
+            continue
+
+        # Otherwise place under the first matching image, fallback append
+        png_stem = r.image_id.split("img_p", 1)[-1].split("_", 1)[-1]
         pattern = re.compile(rf"(\!\[.*?\]\([^\)]*{re.escape(png_stem)}\.png\))")
-        block = _render_block(result)
         if pattern.search(md):
             md = pattern.sub(rf"\1\n\n{block}", md, count=1)
         else:
             md += "\n\n" + block
+
     page_md_path.write_text(md, encoding="utf-8")
 
 
@@ -114,6 +125,7 @@ def describe_page(
     client: OpenAI,
     max_images: int = 8,
     use_cache: bool = True,
+    page_md_override: Path | None = None,
 ) -> List[VlmResult]:
     """
     Describe images on a given page using a vision-language model (VLM).
@@ -127,7 +139,7 @@ def describe_page(
         return []
 
     # Prefilter
-    kept, skipped = prefilter_elements(elems, hcfg)
+    kept, _ = prefilter_elements(elems, hcfg)
     kept = kept[:max_images]
     # Try cache
     pending: List[Element] = []
@@ -180,7 +192,7 @@ def describe_page(
             results.append(VlmResult.model_validate(rec))
 
     # Inject back into markdown
-    page_md = run_dir / f"page_{page:04d}.md"
+    page_md = page_md_override or (run_dir / f"page_{page:04d}.md")
     inject_explanations(page_md, results)
 
     return results
