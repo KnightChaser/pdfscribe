@@ -164,6 +164,11 @@ def describe(
         6, help="Max candidate images to send to VLM per page"
     ),
     use_cache: bool = typer.Option(True, help="Reuse previous VLM JSON if unchanged"),
+    clear_cache: bool = typer.Option(
+        False,
+        "--clear-cache",
+        help="Delete VLM cache (run_dir/vlm_cache) before describing",
+    ),
     entropy_thresh: float = typer.Option(2.0, help="Heuristic: min entropy to keep"),
     edge_density_thresh: float = typer.Option(
         0.004, help="Heuristic: min edge density to keep"
@@ -192,6 +197,17 @@ def describe(
         _abort(
             f"Parsed output not found: {run_dir}. Run 'pdfscribe parse {pdf} -o {outdir}' first."
         )
+
+    # Optional: clear VLM cache on demand
+    if clear_cache:
+        cache_dir = run_dir / "vlm_cache"
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+            if not quiet:
+                console.print(f"[yellow]Cleared cache:[/yellow] {cache_dir}")
+        else:
+            if not quiet:
+                console.print(f"[yellow]No cache to clear:[/yellow] {cache_dir}")
 
     target_dir = run_dir
     if write_mode == "copy":
