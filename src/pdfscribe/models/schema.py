@@ -1,7 +1,7 @@
 # src/pdfscribe/models/schema.py
 from __future__ import annotations
 from typing import Literal, Optional, Tuple, List, Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 BBox = Tuple[int, int, int, int]
 
@@ -27,9 +27,9 @@ class VlmResult(BaseModel):
     ] = "other"
     title_guess: Optional[str] = None
     one_sentence: str
-    bullets: List[str] = []
+    bullets: List[str] = Field(default_factory=list)
     numbers_present: bool = False
-    quoted_values: List[Dict[str, str]] = []
+    quoted_values: List[Dict[str, str]] = Field(default_factory=list)
     gfm_table: Optional[str] = None
     uncertainty_notes: Optional[str] = None
     confidence: float = 0.0
