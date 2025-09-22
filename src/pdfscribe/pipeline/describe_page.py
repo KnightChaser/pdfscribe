@@ -10,6 +10,9 @@ from .assets import read_page_text, list_page_images
 from .prefilter import HeuristicConfig, score_image, HeuristicScore
 
 
+# ---------------------------
+# Cache helpers (slim)
+# ---------------------------
 def _vlm_cache_path(run_dir: Path, image_id: str) -> Path:
     """
     Get the path to the cached VLM result for a given image ID.
@@ -40,6 +43,9 @@ def _save_cached(run_dir: Path, image_id: str, obj: dict) -> None:
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ---------------------------
+# Prefiltering
+# ---------------------------
 def prefilter_elements(
     elems: List[Element], cfg: HeuristicConfig
 ) -> Tuple[List[Element], List[Tuple[Element, HeuristicScore]]]:
@@ -58,34 +64,25 @@ def prefilter_elements(
     return keep, skipped
 
 
+# ---------------------------
+# Markdown rendering (idempotent anchors)
+# ---------------------------
 def _render_block(r: VlmResult) -> str:
     """
-    Render a VLM result as a markdown block with caption and details.
-    The block is anchored with HTML comments for idempotent reinjection.
+    Render a VLM result as a markdown block with an anchored wrapper for idempotency.
     """
     if r.classification == "MEANINGLESS":
         caption = "Decorative/meaningless image. Skipped."
         details = ""
     else:
-        caption = r.one_sentence.strip()
-        bullets = "\n".join(f"- {b}" for b in (r.bullets or []))
-        details = f"""
-<details>
-<summary>Explain</summary>
-
-{bullets}
-
-{f"\n\n{r.gfm_table}" if r.gfm_table else ""}
-
-_Provenance_: id={r.image_id}, conf={r.confidence:.2f}, model={r.model}, sha256={r.image_sha256}
-</details>
-""".strip()
+        caption = r.text.strip()
+        details = f"_Provenance_: id={r.image_id}, conf={r.confidence:.2f}, model={r.model}, sha256={r.image_sha256}"
 
     body = f"""*Caption (VLM):* {caption}
 
 {details}""".strip()
 
-    anchor = "f<!-- pdfscribe:{r.image_id} -->"
+    anchor = f"<!-- pdfscribe:{r.image_id} -->"
     return f"{anchor}\n{body}\n{anchor}"
 
 
@@ -138,10 +135,11 @@ def describe_page(
     if not elems:
         return []
 
-    # Prefilter
+    # Prefilter and truncate per page
     kept, _ = prefilter_elements(elems, hcfg)
     kept = kept[:max_images]
-    # Try cache
+
+    # Load from cache when it is possible
     pending: List[Element] = []
     results: List[VlmResult] = []
     for e in kept:
@@ -153,7 +151,25 @@ def describe_page(
                 and cache.get("model") == model
                 and cache.get("prompt_version") == prompt_version
             ):
-                results.append(VlmResult.model_validate(cache))
+                results.append(
+                    VlmResult.model_validate(
+                        {
+                            "page": cache.get("page", page),
+                            "image_id": cache["image_id"],
+                            "classification": cache["classification"],
+                            "text": cache.get("text", ""),
+                            "confidence": cache.get(
+                                "confidence",
+                                0.7
+                                if cache.get("classification") == "INFORMATIVE"
+                                else 0.6,
+                            ),
+                            "model": cache["model"],
+                            "prompt_version": cache["prompt_version"],
+                            "image_sha256": cache["image_sha256"],
+                        }
+                    )
+                )
                 continue
         pending.append(e)
 
@@ -165,29 +181,20 @@ def describe_page(
         pairs = describe_images_simple(
             client=client, model=model, page_text_hint=page_text, elements=pending
         )
+
         for image_id, text in pairs:
-            # Build the tiniest record for caching + downstream uses
             el = next(e for e in pending if e.id == image_id)
+            is_meaningless = (text or "").strip().upper() == "MEANINGLESS"
             rec = {
                 "page": page,
                 "image_id": image_id,
-                "classification": "MEANINGLESS"
-                if text.upper() == "MEANINGLESS"
-                else "INFORMATIVE",
-                "kind": "other",
-                "title_guess": None,
-                "one_sentence": "" if text.upper() == "MEANINGLESS" else text,
-                "bullets": [],
-                "numbers_present": False,
-                "quoted_values": [],
-                "gfm_table": None,
-                "uncertainty_notes": None,
-                "confidence": 1.0 if text.upper() == "MEANINGLESS" else 0.7,
+                "classification": "MEANINGLESS" if is_meaningless else "INFORMATIVE",
+                "text": "" if is_meaningless else text.strip(),
+                "confidence": 0.6 if is_meaningless else 0.7,
                 "model": model,
                 "prompt_version": prompt_version,
                 "image_sha256": el.sha256,
             }
-
             _save_cached(run_dir, image_id, rec)
             results.append(VlmResult.model_validate(rec))
 

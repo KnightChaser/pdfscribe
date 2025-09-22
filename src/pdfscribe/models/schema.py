@@ -1,7 +1,7 @@
 # src/pdfscribe/models/schema.py
 from __future__ import annotations
-from typing import Literal, Optional, Tuple, List, Dict
-from pydantic import BaseModel, Field
+from typing import Literal, Tuple
+from pydantic import BaseModel
 
 BBox = Tuple[int, int, int, int]
 
@@ -13,25 +13,8 @@ class VlmResult(BaseModel):
 
     page: int
     image_id: str
-    classification: Literal["INFORMATIVE", "MEANINGLESS", "UNCERTAIN"]
-    kind: Literal[
-        "photo",
-        "logo",
-        "flowchart",
-        "bar_chart",
-        "line_chart",
-        "pie_chart",
-        "table_snapshot",
-        "illustration",
-        "other",
-    ] = "other"
-    title_guess: Optional[str] = None
-    one_sentence: str
-    bullets: List[str] = Field(default_factory=list)
-    numbers_present: bool = False
-    quoted_values: List[Dict[str, str]] = Field(default_factory=list)
-    gfm_table: Optional[str] = None
-    uncertainty_notes: Optional[str] = None
+    classification: Literal["INFORMATIVE", "MEANINGLESS"]
+    text: str = ""  # Either "MEANINGLESS" or the free description
     confidence: float = 0.0
     # cache/meta
     model: str
