@@ -12,6 +12,7 @@ from . import __version__
 from .config import DoclingConfig
 from .hashutil import sha256_file
 from .cache import cache_is_valid, write_manifest
+from .rate_limit import TokenLimiter
 from .pipeline.parse_pdf import run_docling
 from .pipeline.describe_page import describe_page
 from .pipeline.prefilter import HeuristicConfig
@@ -230,7 +231,10 @@ def describe(
         edge_density_thresh=edge_density_thresh,
     )
 
+    provider_limit_tpm: int = 200_000
+    limiter = TokenLimiter(capacity=int(provider_limit_tpm * 0.8))  # 80% of max
     total = 0
+
     for pg in pages:
         res = describe_page(
             run_dir=run_dir,
@@ -242,6 +246,7 @@ def describe(
             max_images=max_images_per_page,
             use_cache=use_cache,
             page_md_override=target_dir / f"page_{pg:04d}.md",  # write here
+            limiter=limiter,
         )
         total += len(res)
         if not quiet:

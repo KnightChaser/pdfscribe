@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Tuple
 from openai import OpenAI
 from ..models.schema import Element, VlmResult
+from ..rate_limit import TokenLimiter
 from .assets import read_page_text, list_page_images
 from .prefilter import HeuristicConfig, score_image, HeuristicScore
 
@@ -125,6 +126,7 @@ def describe_page(
     max_images: int = 8,
     use_cache: bool = True,
     page_md_override: Path | None = None,
+    limiter: TokenLimiter | None = None,
 ) -> List[VlmResult]:
     """
     Describe images on a given page using a vision-language model (VLM).
@@ -181,7 +183,11 @@ def describe_page(
 
         # TODO: Add page_text for context later
         pairs = describe_images_simple(
-            client=client, model=model, page_text_hint=page_text, elements=pending
+            client=client,
+            model=model,
+            page_text_hint=page_text,
+            elements=pending,
+            limiter=limiter,
         )
 
         for image_id, text in pairs:

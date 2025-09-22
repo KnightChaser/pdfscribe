@@ -5,6 +5,7 @@ import re
 from typing import List, Tuple
 from openai import OpenAI
 from ..models.schema import Element
+from ..rate_limit import TokenLimiter, image_token_cost, approx_text_tokens
 
 # Prompt: strict two-mode behavior (MEANINGLESS vs detailed text)
 SYSTEM_PROMPT = (
@@ -71,6 +72,7 @@ def describe_images_simple(
     model: str,
     page_text_hint: str,
     elements: List[Element],
+    limiter: TokenLimiter | None = None,
 ) -> List[Tuple[str, str]]:  # returns list of (image_id, text_or_MEANINGLESS)
     """
     One-image-per-call for predictability.
@@ -81,7 +83,24 @@ def describe_images_simple(
     # NOTE: Trim page hint a bit; it's only a hint, not an excuse to hallucinate... :)
     hint = (page_text_hint or "")[:1600]
 
+    # NOTE: Token accounting (safe-side estimates)
+    sys_tokens = approx_text_tokens(SYSTEM_PROMPT)
+    user_fixed_tokens = approx_text_tokens(
+        "Page context (do not guess from it; use only if it clarifies terms):"
+    ) + approx_text_tokens(
+        "Analyze this image under the OUTPUT RULES and FORMAT CONSTRAINTS."
+    )
+    hint_tokens = approx_text_tokens(hint)
+
     for el in elements:
+        # NOTE: Estimate token consumption for the current request
+        img_tokens = image_token_cost(el.width, el.height, model=model, detail="high")
+        est_request_tokens = sys_tokens + user_fixed_tokens + hint_tokens + img_tokens
+
+        # Apply the rate limit (block) if needed
+        if limiter is not None:
+            limiter.wait_for_budget(est_request_tokens)
+
         user_content = [
             {
                 "type": "text",
@@ -109,12 +128,23 @@ def describe_images_simple(
         raw = resp.choices[0].message.content or ""
         text = _clean(raw)
 
-        # Final enforcement: only two shapes allowed
+        # NOTE:Prefer actual usage accounting if the API returns it
+        used_input = getattr(resp, "usage", None)
+        total_used = 0
+        if used_input and hasattr(used_input, "total_tokens"):
+            # OpenAI may not always include vision token accounting; be defensive.
+            total_used = int(used_input.total_tokens or 0)
+        else:
+            # Fallback: estimate request + a guess for output tokens
+            out_tokens = approx_text_tokens(text if text != "MEANINGLESS" else "")
+            total_used = est_request_tokens + out_tokens
+
+        if limiter is not None:
+            limiter.spend(total_used)
+
         if text == "MEANINGLESS":
             out.append((el.id, "MEANINGLESS"))
         else:
-            # Ensure single paragraph, keep it compact
-            text = text.replace("\n", " ").strip()
-            out.append((el.id, text))
+            out.append((el.id, text.replace("\n", " ").strip()))
 
     return out
