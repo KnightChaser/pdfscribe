@@ -101,14 +101,16 @@ def inject_explanations(page_md_path: Path, results: List[VlmResult]) -> None:
         # Replace existing "anchored block" if present
         anchored = re.compile(re.escape(anchor) + r".*?" + re.escape(anchor), re.S)
         if anchored.search(md):
-            md = anchored.sub(block, md, count=1)
+            md = anchored.sub(lambda _, b=block: b, md, count=1)
             continue
 
         # Otherwise place under the first matching image, fallback append
         png_stem = r.image_id.split("img_p", 1)[-1].split("_", 1)[-1]
         pattern = re.compile(rf"(\!\[.*?\]\([^\)]*{re.escape(png_stem)}\.png\))")
+
         if pattern.search(md):
-            md = pattern.sub(rf"\1\n\n{block}", md, count=1)
+            # lambda ensures group(1) + block is used literally
+            md = pattern.sub(lambda m, b=block: f"{m.group(1)}\n\n{b}", md, count=1)
         else:
             md += "\n\n" + block
 
