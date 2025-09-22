@@ -72,10 +72,12 @@ def _render_block(r: VlmResult) -> str:
     Render a VLM result as a markdown block with an anchored wrapper for idempotency.
     """
     if r.classification == "MEANINGLESS":
-        caption = "Decorative/meaningless image. Skipped."
+        caption = (
+            "[VLM returned no description.] Decorative/meaningless image. Skipped."
+        )
         details = ""
     else:
-        caption = r.text.strip()
+        caption = r.text.strip() or "[VLM returned no description]"
         details = f"_Provenance_: id={r.image_id}, conf={r.confidence:.2f}, model={r.model}, sha256={r.image_sha256}"
 
     body = f"""*Caption (VLM):* {caption}
@@ -184,12 +186,17 @@ def describe_page(
 
         for image_id, text in pairs:
             el = next(e for e in pending if e.id == image_id)
-            is_meaningless = (text or "").strip().upper() == "MEANINGLESS"
+            t = (text or "").strip()
+            is_meaningless: bool = t.upper() == "MEANINGLESS"
+            if not is_meaningless and not t:
+                # protect against accidentally empty text
+                is_meaningless = True
+
             rec = {
                 "page": page,
                 "image_id": image_id,
                 "classification": "MEANINGLESS" if is_meaningless else "INFORMATIVE",
-                "text": "" if is_meaningless else text.strip(),
+                "text": "" if is_meaningless else t,
                 "confidence": 0.6 if is_meaningless else 0.7,
                 "model": model,
                 "prompt_version": prompt_version,

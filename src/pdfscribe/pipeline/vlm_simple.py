@@ -6,11 +6,22 @@ from typing import List, Tuple
 from openai import OpenAI
 from ..models.schema import Element
 
+# Prompt: strict two-mode behavior (MEANINGLESS vs detailed text)
 SYSTEM_PROMPT = (
-    "You are a precise, terse image describer.\n"
-    "If the image is decorative, a logo, gradient, page background, stock photo, or otherwise not informative for a report, reply EXACTLY: MEANINGLESS\n"
-    "Otherwise reply with 1–2 sentences describing the key information in the image (chart trend, main entities, gist). "
-    "Do NOT add preambles, labels, JSON, quotes, or extra text."
+    "You are a precise, no-nonsense image describer for technical documents.\n"
+    "\n"
+    "OUTPUT RULES (very important):\n"
+    "1) If the image is decorative or not informative for a report (e.g., logo, divider, gradient, page background, stock photo with no data), reply EXACTLY: MEANINGLESS\n"
+    "   - Must be UPPERCASE, no punctuation, no extra text, no quotes.\n"
+    "2) Otherwise, reply with FREE TEXT ONLY (no labels, no JSON), describing the visible information as faithfully as possible.\n"
+    "   - If the image is a chart/graph/infographic/table snapshot, enumerate ALL clearly visible numeric values verbatim, with units and labels exactly as shown.\n"
+    "   - Prefer a concise sentence first, then a compact enumeration (e.g., “2017: 12,000; 2018: 15,993; 2019: 20,019”).\n"
+    "   - Do NOT invent, infer, or guess values. If something is unreadable or cut off, omit it (do not estimate).\n"
+    "   - Keep it factual and compact. Avoid hedging words like “maybe”, “appears”, “likely”.\n"
+    "\n"
+    "FORMAT CONSTRAINTS:\n"
+    "- Your response must be either exactly MEANINGLESS, or a single paragraph of plain text.\n"
+    "- No preambles, no code fences, no markdown headings, no quotes.\n"
 )
 
 
@@ -23,6 +34,38 @@ def _to_data_url(path: str) -> str:
     return f"data:image/png;base64,{b64}"
 
 
+# tiny sanitizer to enforce our strict output contract
+_CODEFENCE_RE = re.compile(r"^```(?:\w+)?\s*|\s*```$", re.S)
+_WS_RE = re.compile(r"[ \t\r\f\v]+")
+
+
+def _clean(text: str) -> str:
+    """
+    Clean and normalize model output text.
+    Strips code fences, surrounding quotes, collapses whitespace.
+    Normalizes "MEANINGLESS" to exact uppercase.
+    """
+    s = (text or "").strip()
+    if not s:
+        return "MEANINGLESS"  # fallback
+
+    # Code block
+    if s.startswith("```"):
+        s = _CODEFENCE_RE.sub("", s).strip()
+    if (s.startswith('"') and s.endswith('"')) or (
+        s.startswith("'") and s.endswith("'")
+    ):
+        s = s[1:-1].strip()
+    s = _WS_RE.sub(" ", s).strip()
+
+    # Final checks (enforce exact MEANINGLESS)
+    if not s:
+        return "MEANINGLESS"
+    if s.upper() == "MEANINGLESS":
+        return "MEANINGLESS"
+    return s
+
+
 def describe_images_simple(
     client: OpenAI,
     model: str,
@@ -30,30 +73,48 @@ def describe_images_simple(
     elements: List[Element],
 ) -> List[Tuple[str, str]]:  # returns list of (image_id, text_or_MEANINGLESS)
     """
-    Send ONE image at a time (simplest + most predictable).
-    Returns a list of (image_id, raw_text) where raw_text is either 'MEANINGLESS'
-    or a 1–2 sentence description.
+    One-image-per-call for predictability.
+    Returns either "MEANINGLESS" (verbatim) or a single-paragraph free-text description
+    that enumerates numeric info verbatim when present.
     """
     out: List[Tuple[str, str]] = []
+    # NOTE: Trim page hint a bit; it's only a hint, not an excuse to hallucinate... :)
+    hint = (page_text_hint or "")[:1600]
+
     for el in elements:
         user_content = [
-            {"type": "text", "text": "Page context:\n" + page_text_hint[:2000]},
-            {"type": "text", "text": "Analyze this image per the rules."},
+            {
+                "type": "text",
+                "text": "Page context (do not guess from it; use only if it clarifies terms):\n"
+                + hint,
+            },
+            {
+                "type": "text",
+                "text": "Analyze this image under the OUTPUT RULES and FORMAT CONSTRAINTS.",
+            },
             {"type": "image_url", "image_url": {"url": _to_data_url(el.path)}},
         ]
+
         resp = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            temperature=0,  # determinism
-            max_tokens=200,  # enough for 1–2 sentences
+            temperature=0,  # for determinism
+            top_p=1,
+            max_tokens=1000,  # allow enumerating many labels/values by restricting max token count per image
         )
-        text = (resp.choices[0].message.content or "").strip()
-        # heal common nuisances (some models wrap in code fences or quotes)
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:\w+)?\s*|\s*```$", "", text, flags=re.S).strip()
-        text = text.strip('"').strip()
-        out.append((el.id, text))
+
+        raw = resp.choices[0].message.content or ""
+        text = _clean(raw)
+
+        # Final enforcement: only two shapes allowed
+        if text == "MEANINGLESS":
+            out.append((el.id, "MEANINGLESS"))
+        else:
+            # Ensure single paragraph, keep it compact
+            text = text.replace("\n", " ").strip()
+            out.append((el.id, text))
+
     return out
