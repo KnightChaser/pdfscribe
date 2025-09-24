@@ -2,7 +2,6 @@
 from __future__ import annotations
 from pathlib import Path
 import typer
-import os
 import shutil
 from rich.console import Console
 from rich.panel import Panel
