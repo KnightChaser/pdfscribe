@@ -43,25 +43,6 @@ def _prepare_render_dir(source: Path, target: Path) -> None:
     if idx.exists():
         shutil.copy2(idx, target / "index.md")
 
-    # 2. Link or symlink images to avoid duplication
-    src_img = source / "images"
-    dst_img = target / "images"
-    if dst_img.exists():
-        return
-    for p in src_img.rglob("*"):
-        rel = p.relative_to(src_img)
-        d = dst_img / rel.parent
-        d.mkdir(parents=True, exist_ok=True)
-        if p.is_file():
-            try:
-                os.link(p, d / p.name)  # hard link
-            except OSError:
-                # fallback to symlink.
-                try:
-                    (d / p.name).symlink_to(p)
-                except Exception:
-                    shutil.copy2(p, d / p.name)  # last resort: copy
-
 
 @app.command("parse")
 def parse(
