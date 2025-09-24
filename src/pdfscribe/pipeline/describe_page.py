@@ -76,17 +76,12 @@ def _render_block(r: VlmResult) -> str:
         caption = (
             "[VLM returned no description.] Decorative/meaningless image. Skipped."
         )
-        details = ""
     else:
         caption = r.text.strip() or "[VLM returned no description]"
-        details = f"_Provenance_: id={r.image_id}, conf={r.confidence:.2f}, model={r.model}, sha256={r.image_sha256}"
 
-    body = f"""*Caption (VLM):* {caption}
+    body = f"[There was an image here. The caption of the image is: {caption}]"
 
-{details}""".strip()
-
-    anchor = f"<!-- pdfscribe:{r.image_id} -->"
-    return f"{anchor}\n{body}\n{anchor}"
+    return body
 
 
 def inject_explanations(page_md_path: Path, results: List[VlmResult]) -> None:
