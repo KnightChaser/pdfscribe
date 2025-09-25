@@ -12,6 +12,7 @@ from .config import DoclingConfig
 from .hashutil import sha256_file
 from .cache import cache_is_valid, write_manifest
 from .rate_limit import TokenLimiter
+from .run_index import make_record, upsert_run_record
 from .pipeline.parse_pdf import run_docling
 from .pipeline.describe_page import describe_page
 from .pipeline.prefilter import HeuristicConfig
@@ -115,6 +116,13 @@ def parse(
         run_dir, input_pdf=pdf, sha256=sha, cfg=cfg, tool_version=__version__
     )
 
+    # NOTE: Also update the global index files in outdir,
+    # since the new entry inside the output directory has been created. >_<
+    rec = make_record(
+        input_pdf=pdf, run_dir=run_dir, sha256=sha, tool_version=__version__
+    )
+    upsert_run_record(outdir, rec)
+
     if not quiet:
         console.print(
             f"[bold green]Done[/bold green]. {len(md_files)} markdown files emitted."
@@ -196,6 +204,7 @@ def describe(
         _prepare_render_dir(source=run_dir, target=target_dir)
 
     client = OpenAI()  # needs OPENAI_API_KEY in env
+
     # Discover page count from existing files
     pages = sorted(int(p.stem.split("_")[1]) for p in run_dir.glob("page_*.md"))
     if page != -1:
